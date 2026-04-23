@@ -1896,108 +1896,105 @@ async deleteDocument(req, res) {
       });
     }
     
-    // ELIMINACIÓN FÍSICA (solo admin)
-    if (permanente === 'true' && req.user.rol === 'administrador') {
-      console.log('🔥 ELIMINACIÓN FÍSICA por administrador');
-      console.log('📦 Documento a eliminar:', {
-        id: documento.id,
-        titulo: documento.titulo,
-        ruta_archivo: documento.ruta_archivo,
-        tamaño: documento.tamaño_archivo
-      });
+// ELIMINACIÓN FÍSICA (solo admin)
+if (permanente === 'true' && req.user.rol === 'administrador') {
+  console.log('🔥 ELIMINACIÓN FÍSICA por administrador');
+  console.log('📦 Documento a eliminar:', {
+    id: documento.id,
+    titulo: documento.titulo,
+    ruta_archivo: documento.ruta_archivo,
+    tamaño: documento.tamaño_archivo
+  });
+  
+  // Guardar información antes de eliminar
+  const rutaArchivoFTP = documento.ruta_archivo;
+  const tamanioArchivo = documento.tamaño_archivo;
+  const departamentoId = documento.departamento_id;
+  
+  // ========== 🔥 ORDEN CORREGIDO: PRIMERO ELIMINAR EL DOCUMENTO ==========
+  console.log('   🗑️ Eliminando documento de la BD...');
+  const deleteResult = await client.query(
+    'DELETE FROM documentos WHERE id = $1 RETURNING *',
+    [id]
+  );
+  
+  if (deleteResult.rows.length === 0) {
+    throw new Error('No se pudo eliminar el documento de la BD');
+  }
+  
+  console.log('   ✅ Documento eliminado de BD');
+  
+  // ========== AHORA ELIMINAR REGISTROS RELACIONADOS ==========
+  console.log('📦 Eliminando registros relacionados...');
+  
+  // Eliminar categorías
+  await client.query(
+    'DELETE FROM documentos_categorias WHERE documento_id = $1',
+    [id]
+  );
+  console.log('   ✅ Categorías eliminadas');
+  
+  // Eliminar transferencias
+  await client.query(
+    'DELETE FROM transferencias_departamento WHERE documento_id = $1',
+    [id]
+  );
+  console.log('   ✅ Transferencias eliminadas');
+  
+  // 🔥 IMPORTANTE: NO eliminar historial manualmente
+  // El trigger registrar_historial_documento ya insertó el registro
+  // y debe conservarse para auditoría
+  
+  // Actualizar espacio de almacenamiento
+  await client.query(
+    `UPDATE espacio_almacenamiento 
+     SET usado_bytes = GREATEST(0, COALESCE(usado_bytes, 0) - $1),
+         fecha_calculo = CURRENT_TIMESTAMP
+     WHERE departamento_id = $2`,
+    [tamanioArchivo, departamentoId]
+  );
+  console.log('   ✅ Espacio actualizado');
+  
+  // Hacer COMMIT de la transacción
+  await client.query('COMMIT');
+  console.log('✅ COMMIT exitoso - Documento eliminado de BD');
+  client.release();
+  
+  // AHORA eliminar archivo FTP (después del COMMIT exitoso)
+  let ftpResult = { success: false, message: 'No se intentó' };
+  
+  if (rutaArchivoFTP) {
+    try {
+      console.log(`📂 Eliminando archivo FTP: ${rutaArchivoFTP}`);
+      ftpResult = await ftpService.deleteFile(rutaArchivoFTP);
       
-      // Guardar información antes de eliminar
-      const rutaArchivoFTP = documento.ruta_archivo;
-      const tamanioArchivo = documento.tamaño_archivo;
-      const departamentoId = documento.departamento_id;
-      
-      // 1. Eliminar registros relacionados
-      console.log('📦 Eliminando registros relacionados...');
-      
-      // Eliminar categorías
-      await client.query(
-        'DELETE FROM documentos_categorias WHERE documento_id = $1',
-        [id]
-      );
-      console.log('   ✅ Categorías eliminadas');
-      
-      // Eliminar transferencias
-      await client.query(
-        'DELETE FROM transferencias_departamento WHERE documento_id = $1',
-        [id]
-      );
-      console.log('   ✅ Transferencias eliminadas');
-      
-      // Eliminar historial (el trigger ya debería haber insertado, pero por si acaso)
-      await client.query(
-        'DELETE FROM historial_documentos WHERE documento_id = $1',
-        [id]
-      );
-      console.log('   ✅ Historial eliminado');
-      
-      // 2. Eliminar el documento (esto dispara el trigger)
-      console.log('   🗑️ Eliminando documento de la BD...');
-      const deleteResult = await client.query(
-        'DELETE FROM documentos WHERE id = $1 RETURNING *',
-        [id]
-      );
-      
-      if (deleteResult.rows.length === 0) {
-        throw new Error('No se pudo eliminar el documento de la BD');
+      if (ftpResult.success) {
+        console.log(`✅ Archivo eliminado del FTP exitosamente`);
+        console.log(`   Método: ${ftpResult.metodo || 'directo'}`);
+        console.log(`   Ruta: ${ftpResult.path || rutaArchivoFTP}`);
+      } else {
+        console.log(`⚠️ No se pudo eliminar el archivo FTP: ${ftpResult.message}`);
       }
       
-      console.log('   ✅ Documento eliminado de BD');
-      
-      // 3. Actualizar espacio de almacenamiento
-      await client.query(
-        `UPDATE espacio_almacenamiento 
-         SET usado_bytes = GREATEST(0, COALESCE(usado_bytes, 0) - $1),
-             fecha_calculo = CURRENT_TIMESTAMP
-         WHERE departamento_id = $2`,
-        [tamanioArchivo, departamentoId]
-      );
-      console.log('   ✅ Espacio actualizado');
-      
-      // 4. Hacer COMMIT de la transacción
-      await client.query('COMMIT');
-      console.log('✅ COMMIT exitoso - Documento eliminado de BD');
-      client.release();
-      
-      // 5. AHORA eliminar archivo FTP (después del COMMIT exitoso)
-      let ftpResult = { success: false, message: 'No se intentó' };
-      
-      if (rutaArchivoFTP) {
-        try {
-          console.log(`📂 Eliminando archivo FTP: ${rutaArchivoFTP}`);
-          ftpResult = await ftpService.deleteFile(rutaArchivoFTP);
-          
-          if (ftpResult.success) {
-            console.log(`✅ Archivo eliminado del FTP exitosamente`);
-            console.log(`   Método: ${ftpResult.metodo || 'directo'}`);
-            console.log(`   Ruta: ${ftpResult.path || rutaArchivoFTP}`);
-          } else {
-            console.log(`⚠️ No se pudo eliminar el archivo FTP: ${ftpResult.message}`);
-          }
-          
-        } catch (ftpError) {
-          console.error('❌ Error eliminando archivo del FTP:', ftpError.message);
-          ftpResult = { success: false, error: ftpError.message };
-        }
-      }
-      
-      console.log('✅✅✅ Documento eliminado permanentemente del sistema');
-      
-      res.json({
-        success: true,
-        message: ftpResult.success 
-          ? 'Documento ELIMINADO PERMANENTEMENTE del sistema (FTP + BD)'
-          : 'Documento ELIMINADO de BD pero hubo problemas con el archivo FTP',
-        eliminacion: 'fisica',
-        documento_id: id,
-        espacio_liberado: formatBytes(tamanioArchivo),
-        ftp_eliminado: ftpResult.success || false,
-        ftp_detalle: ftpResult
-      });
+    } catch (ftpError) {
+      console.error('❌ Error eliminando archivo del FTP:', ftpError.message);
+      ftpResult = { success: false, error: ftpError.message };
+    }
+  }
+  
+  console.log('✅✅✅ Documento eliminado permanentemente del sistema');
+  
+  res.json({
+    success: true,
+    message: ftpResult.success 
+      ? 'Documento ELIMINADO PERMANENTEMENTE del sistema (FTP + BD)'
+      : 'Documento ELIMINADO de BD pero hubo problemas con el archivo FTP',
+    eliminacion: 'fisica',
+    documento_id: id,
+    espacio_liberado: formatBytes(tamanioArchivo),
+    ftp_eliminado: ftpResult.success || false,
+    ftp_detalle: ftpResult
+  });
       
     } else {
       // ELIMINACIÓN LÓGICA (mover a papelera)
