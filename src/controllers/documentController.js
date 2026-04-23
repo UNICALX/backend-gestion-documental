@@ -1911,7 +1911,31 @@ if (permanente === 'true' && req.user.rol === 'administrador') {
   const tamanioArchivo = documento.tamaño_archivo;
   const departamentoId = documento.departamento_id;
   
-  // ========== 🔥 ORDEN CORREGIDO: PRIMERO ELIMINAR EL DOCUMENTO ==========
+  // ========== 🔥 ORDEN CORRECTO: PRIMERO ELIMINAR RELACIONES ==========
+  console.log('📦 Eliminando registros relacionados...');
+  
+  // 1. Eliminar historial MANUALMENTE (ANTES de eliminar el documento)
+  await client.query(
+    'DELETE FROM historial_documentos WHERE documento_id = $1',
+    [id]
+  );
+  console.log('   ✅ Historial eliminado');
+  
+  // 2. Eliminar categorías
+  await client.query(
+    'DELETE FROM documentos_categorias WHERE documento_id = $1',
+    [id]
+  );
+  console.log('   ✅ Categorías eliminadas');
+  
+  // 3. Eliminar transferencias
+  await client.query(
+    'DELETE FROM transferencias_departamento WHERE documento_id = $1',
+    [id]
+  );
+  console.log('   ✅ Transferencias eliminadas');
+  
+  // 4. AHORA SÍ, eliminar el documento (ya no hay restricciones)
   console.log('   🗑️ Eliminando documento de la BD...');
   const deleteResult = await client.query(
     'DELETE FROM documentos WHERE id = $1 RETURNING *',
@@ -1924,28 +1948,7 @@ if (permanente === 'true' && req.user.rol === 'administrador') {
   
   console.log('   ✅ Documento eliminado de BD');
   
-  // ========== AHORA ELIMINAR REGISTROS RELACIONADOS ==========
-  console.log('📦 Eliminando registros relacionados...');
-  
-  // Eliminar categorías
-  await client.query(
-    'DELETE FROM documentos_categorias WHERE documento_id = $1',
-    [id]
-  );
-  console.log('   ✅ Categorías eliminadas');
-  
-  // Eliminar transferencias
-  await client.query(
-    'DELETE FROM transferencias_departamento WHERE documento_id = $1',
-    [id]
-  );
-  console.log('   ✅ Transferencias eliminadas');
-  
-  // 🔥 IMPORTANTE: NO eliminar historial manualmente
-  // El trigger registrar_historial_documento ya insertó el registro
-  // y debe conservarse para auditoría
-  
-  // Actualizar espacio de almacenamiento
+  // 5. Actualizar espacio de almacenamiento
   await client.query(
     `UPDATE espacio_almacenamiento 
      SET usado_bytes = GREATEST(0, COALESCE(usado_bytes, 0) - $1),
@@ -1955,12 +1958,12 @@ if (permanente === 'true' && req.user.rol === 'administrador') {
   );
   console.log('   ✅ Espacio actualizado');
   
-  // Hacer COMMIT de la transacción
+  // 6. Hacer COMMIT de la transacción
   await client.query('COMMIT');
   console.log('✅ COMMIT exitoso - Documento eliminado de BD');
   client.release();
   
-  // AHORA eliminar archivo FTP (después del COMMIT exitoso)
+  // 7. Eliminar archivo FTP (después del COMMIT exitoso)
   let ftpResult = { success: false, message: 'No se intentó' };
   
   if (rutaArchivoFTP) {
@@ -1995,42 +1998,42 @@ if (permanente === 'true' && req.user.rol === 'administrador') {
     ftp_eliminado: ftpResult.success || false,
     ftp_detalle: ftpResult
   });
-      
-    } else {
-      // ELIMINACIÓN LÓGICA (mover a papelera)
-      console.log('📦 Eliminación lógica (mover a papelera)');
-      
-      if (documento.eliminado) {
-        await client.query('ROLLBACK');
-        client.release();
-        return res.status(400).json({ 
-          success: false, 
-          error: 'El documento ya está eliminado' 
-        });
-      }
-      
-      await client.query(
-        `UPDATE documentos 
-         SET eliminado = true, 
-             fecha_actualizacion = CURRENT_TIMESTAMP 
-         WHERE id = $1`,
-        [id]
-      );
-      
-      await client.query('COMMIT');
-      client.release();
-      
-      console.log('✅ Documento movido a papelera');
-      
-      res.json({
-        success: true,
-        message: 'Documento movido a la papelera. Puede ser restaurado posteriormente.',
-        eliminacion: 'logica',
-        documento_id: id,
-        puede_restaurar: true,
-        fecha_eliminacion: new Date().toISOString()
-      });
-    }
+  
+} else {
+  // ELIMINACIÓN LÓGICA (mover a papelera)
+  console.log('📦 Eliminación lógica (mover a papelera)');
+  
+  if (documento.eliminado) {
+    await client.query('ROLLBACK');
+    client.release();
+    return res.status(400).json({ 
+      success: false, 
+      error: 'El documento ya está eliminado' 
+    });
+  }
+  
+  await client.query(
+    `UPDATE documentos 
+     SET eliminado = true, 
+         fecha_actualizacion = CURRENT_TIMESTAMP 
+     WHERE id = $1`,
+    [id]
+  );
+  
+  await client.query('COMMIT');
+  client.release();
+  
+  console.log('✅ Documento movido a papelera');
+  
+  res.json({
+    success: true,
+    message: 'Documento movido a la papelera. Puede ser restaurado posteriormente.',
+    eliminacion: 'logica',
+    documento_id: id,
+    puede_restaurar: true,
+    fecha_eliminacion: new Date().toISOString()
+  });
+}
     
   } catch (error) {
     console.error('❌ Error eliminando documento:');
