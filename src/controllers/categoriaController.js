@@ -544,8 +544,12 @@ const transferirCategoria = async (req, res) => {
     } = req.body;
     const usuarioId = req.user?.id;
     
+    console.log('🔥 === TRANSFERIR CATEGORÍA (CONTROLADOR) ===');
+    console.log('📦 Datos recibidos:', { categoria_id, desde_departamento_id, hacia_departamento_id, transferir_documentos, motivo });
+    console.log('👤 Usuario:', usuarioId);
+    
     try {
-        // 🔥 MODIFICADO: Verificar que el usuario sea admin
+        // 🔥 Verificar que el usuario sea admin
         if (req.user.rol !== 'administrador') {
             return res.status(403).json({
                 exito: false,
@@ -553,10 +557,25 @@ const transferirCategoria = async (req, res) => {
             });
         }
         
-        if (!categoria_id || !desde_departamento_id || !hacia_departamento_id) {
+        // Validaciones
+        if (!categoria_id) {
             return res.status(400).json({
                 exito: false,
-                mensaje: 'Categoría y departamentos son requeridos'
+                mensaje: 'categoria_id es requerido'
+            });
+        }
+        
+        if (!desde_departamento_id) {
+            return res.status(400).json({
+                exito: false,
+                mensaje: 'desde_departamento_id es requerido'
+            });
+        }
+        
+        if (!hacia_departamento_id) {
+            return res.status(400).json({
+                exito: false,
+                mensaje: 'hacia_departamento_id es requerido'
             });
         }
 
@@ -567,52 +586,77 @@ const transferirCategoria = async (req, res) => {
             });
         }
 
-        const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+        const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress || '127.0.0.1';
         
-        const query = `
-            SELECT * FROM transferir_categoria_departamento(
-                $1, $2, $3, $4, $5, $6, $7
-            ) as resultado;
-        `;
-        
-        const result = await db.query(query, [
-            categoria_id, 
-            desde_departamento_id, 
-            hacia_departamento_id, 
+        console.log('📞 Llamando a función PostgreSQL con parámetros:', {
+            categoria_id,
+            desde_departamento_id,
+            hacia_departamento_id,
             usuarioId,
             transferir_documentos,
             motivo,
             ipAddress
+        });
+        
+        // 🔥 ORDEN CORRECTO DE PARÁMETROS según la función PostgreSQL
+        const query = `
+            SELECT * FROM transferir_categoria_departamento(
+                $1::INTEGER,   -- p_categoria_id
+                $2::INTEGER,   -- p_desde_departamento_id
+                $3::INTEGER,   -- p_hacia_departamento_id
+                $4::INTEGER,   -- p_usuario_id
+                $5::BOOLEAN,   -- p_transferir_documentos
+                $6::TEXT,      -- p_motivo
+                $7::TEXT       -- p_ip_address
+            ) as resultado;
+        `;
+        
+        const result = await db.query(query, [
+            parseInt(categoria_id),
+            parseInt(desde_departamento_id),
+            parseInt(hacia_departamento_id),
+            parseInt(usuarioId),
+            transferir_documentos === true || transferir_documentos === 'true',
+            motivo || 'Reorganización administrativa',
+            ipAddress
         ]);
         
+        console.log('📥 Respuesta de PostgreSQL:', JSON.stringify(result.rows[0], null, 2));
+        
         if (!result.rows[0] || !result.rows[0].resultado) {
+            console.error('❌ PostgreSQL devolvió resultado vacío');
             return res.status(500).json({
                 exito: false,
-                mensaje: 'Error interno del servidor'
+                mensaje: 'Error interno del servidor: respuesta vacía de PostgreSQL'
             });
         }
         
         const resultado = result.rows[0].resultado;
+        console.log('📊 Resultado parseado:', resultado);
         
         if (resultado.exitoso) {
+            console.log('✅ Transferencia exitosa');
             res.json({
                 exito: true,
                 mensaje: resultado.mensaje,
                 detalles: resultado.detalles
             });
         } else {
+            console.log('❌ Error en transferencia:', resultado.mensaje);
             res.status(400).json({
                 exito: false,
                 mensaje: resultado.mensaje,
-                codigo_error: resultado.codigo_error
+                codigo_error: resultado.codigo_error || 'ERROR_TRANSFERENCIA'
             });
         }
     } catch (error) {
-        console.error('Error transfiriendo categoría:', error);
+        console.error('💥 Error transfiriendo categoría:', error);
+        console.error('Stack:', error.stack);
         res.status(500).json({
             exito: false,
             mensaje: 'Error transfiriendo categoría',
-            error: error.message
+            error: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
     }
 };
