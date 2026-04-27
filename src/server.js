@@ -1,3 +1,4 @@
+// backend/src/server.js
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
@@ -48,21 +49,21 @@ const getAllowedOrigins = () => {
   return origins;
 };
 
-// Configurar CORS mejorada
+// 🔥 CONFIGURACIÓN CORS CORREGIDA - AGREGADO CACHE-CONTROL
 const corsOptions = {
   origin: function (origin, callback) {
     const allowedOrigins = getAllowedOrigins();
     
-    // 🔥 NUEVO: Permitir peticiones sin origin (Postman, scripts, etc.)
+    // Permitir peticiones sin origin (Postman, scripts, etc.)
     if (!origin) {
       console.log('✅ CORS: Petición sin origen (permitida)');
       return callback(null, true);
     }
     
-    // 🔥 NUEVO: Permitir cualquier subdominio de vercel.app (para futuros despliegues)
+    // Permitir cualquier subdominio de vercel.app (para futuros despliegues)
     const isVercelApp = origin.includes('.vercel.app') || origin.includes('.vercel.com');
     
-    // 🔥 NUEVO: Permitir cualquier subdominio de onrender.com
+    // Permitir cualquier subdominio de onrender.com
     const isRenderApp = origin.includes('.onrender.com');
     
     const isAllowed = allowedOrigins.includes(origin) || isVercelApp || isRenderApp;
@@ -79,8 +80,30 @@ const corsOptions = {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
-  optionsSuccessStatus: 200
+  // 🔥 HEADERS PERMITIDOS - AGREGADO CACHE-CONTROL
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'Accept', 
+    'X-Requested-With',
+    'cache-control',        // ← AGREGADO (minúsculas)
+    'Cache-Control',        // ← AGREGADO (mayúsculas)
+    'Origin',
+    'X-Auth-Token',
+    'x-access-token',
+    'If-Modified-Since',
+    'If-None-Match'
+  ],
+  // 🔥 HEADERS EXPUESTOS PARA DESCARGAS
+  exposedHeaders: [
+    'Content-Disposition', 
+    'Content-Length',
+    'Content-Type',
+    'Cache-Control'
+  ],
+  optionsSuccessStatus: 200,
+  // 🔥 PERMITIR PREFLIGHT PARA TODAS LAS RUTAS
+  preflightContinue: false
 };
 
 app.use(cors(corsOptions));
@@ -90,6 +113,14 @@ app.use(express.urlencoded({ extended: true }));
 // Middleware de logging mejorado
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl} - Origin: ${req.headers.origin || 'local'}`);
+  next();
+});
+
+// Middleware para agregar headers de seguridad adicionales
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
   next();
 });
 
@@ -217,5 +248,7 @@ app.listen(PORT, HOST, () => {
   });
   console.log('   - *.vercel.app (todos)');
   console.log('   - *.onrender.com (todos)');
-  console.log('\n🔥 Servidor listo para producción en Render + Vercel\n');
+  console.log('\n🔥 Headers permitidos CORS: cache-control, Cache-Control, etc.');
+  console.log('📥 Headers expuestos para descargas: Content-Disposition, Content-Length');
+  console.log('\n🚀 Servidor listo para producción en Render + Vercel\n');
 });
