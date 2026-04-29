@@ -1690,155 +1690,183 @@ if (titulo && titulo !== documento.titulo) {
   }
   
   // ========== TRANSFERIR DOCUMENTO ==========
-  async transferDocument(req, res) {
-    const client = await pool.connect();
-    try {
-      const { id } = req.params;
-      const { hacia_departamento_id, motivo } = req.body;
-      
-      console.log('🔄 Iniciando transferencia:', {
-        documento_id: id,
-        desde_departamento: req.user.departamento_id,
-        hacia_departamento: hacia_departamento_id,
-        usuario: req.user.id
+/**
+ * Transferir documento entre departamentos
+ */
+async transferDocument(req, res) {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { hacia_departamento_id, motivo } = req.body;
+    
+    console.log('🔄 Iniciando transferencia:', {
+      documento_id: id,
+      hacia_departamento: hacia_departamento_id,
+      usuario: req.user.id,
+      rol: req.user.rol
+    });
+    
+    if (!hacia_departamento_id) {
+      client.release();
+      return res.status(400).json({ 
+        success: false, 
+        error: 'El departamento destino es requerido' 
       });
+    }
+    
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress || '127.0.0.1';
+    await client.query(`SET LOCAL app.usuario_id = '${req.user.id}'`);
+    await client.query(`SET LOCAL app.ip_address = '${ipAddress}'`);
+    
+    await client.query('BEGIN');
+    
+    // 🔥 CONSULTA CORREGIDA: Los administradores pueden transferir CUALQUIER documento
+    let query = `
+      SELECT d.*, dep.nombre as departamento_actual 
+      FROM documentos d 
+      JOIN departamentos dep ON d.departamento_id = dep.id 
+      WHERE d.id = $1 AND d.eliminado = false
+    `;
+    
+    const params = [id];
+    
+    // Solo verificar departamento si NO es administrador
+    if (req.user.rol !== 'administrador') {
+      query += ` AND d.departamento_id = $2`;
+      params.push(req.user.departamento_id);
+    }
+    
+    const docResult = await client.query(query, params);
+    
+    if (docResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      client.release();
       
-      if (!hacia_departamento_id) {
-        client.release();
-        return res.status(400).json({ 
+      if (req.user.rol === 'administrador') {
+        return res.status(404).json({ 
           success: false, 
-          error: 'El departamento destino es requerido' 
+          error: 'Documento no encontrado o está eliminado' 
         });
-      }
-      
-      const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress || '127.0.0.1';
-      await client.query(`SET LOCAL app.usuario_id = '${req.user.id}'`);
-      await client.query(`SET LOCAL app.ip_address = '${ipAddress}'`);
-      
-      await client.query('BEGIN');
-      
-      const docResult = await client.query(
-        `SELECT d.*, dep.nombre as departamento_actual 
-         FROM documentos d 
-         JOIN departamentos dep ON d.departamento_id = dep.id 
-         WHERE d.id = $1 AND d.departamento_id = $2 AND d.eliminado = false`,
-        [id, req.user.departamento_id]
-      );
-      
-      if (docResult.rows.length === 0) {
-        await client.query('ROLLBACK');
-        client.release();
+      } else {
         return res.status(404).json({ 
           success: false, 
           error: 'Documento no encontrado en tu departamento' 
         });
       }
-      
-      const documento = docResult.rows[0];
-      
-      if (parseInt(hacia_departamento_id) === req.user.departamento_id) {
-        await client.query('ROLLBACK');
-        client.release();
-        return res.status(400).json({ 
-          success: false, 
-          error: 'No puedes transferir a tu mismo departamento' 
-        });
-      }
-      
-      const deptResult = await client.query(
-        'SELECT * FROM departamentos WHERE id = $1 AND activo = true',
-        [hacia_departamento_id]
-      );
-      
-      if (deptResult.rows.length === 0) {
-        await client.query('ROLLBACK');
-        client.release();
-        return res.status(400).json({ 
-          success: false, 
-          error: 'Departamento destino no encontrado o inactivo' 
-        });
-      }
-      
-      const departamentoDestino = deptResult.rows[0];
-      
-      await client.query(
-        `UPDATE documentos 
-         SET departamento_id = $1, 
-             fecha_actualizacion = CURRENT_TIMESTAMP 
-         WHERE id = $2`,
-        [hacia_departamento_id, id]
-      );
-      
-      console.log('✅ Documento actualizado con nuevo departamento');
-      
-      await client.query(
-        `INSERT INTO transferencias_departamento (
-          documento_id, desde_departamento_id, hacia_departamento_id, 
-          transferido_por, motivo, transferencia_masiva
-        ) VALUES ($1, $2, $3, $4, $5, $6)`,
-        [
-          id,
-          req.user.departamento_id,
-          hacia_departamento_id,
-          req.user.id,
-          motivo?.trim() || 'Transferencia administrativa',
-          false
-        ]
-      );
-      
-      await client.query(
-        `UPDATE espacio_almacenamiento 
-         SET usado_bytes = GREATEST(0, COALESCE(usado_bytes, 0) - $1),
-             fecha_calculo = CURRENT_TIMESTAMP
-         WHERE departamento_id = $2`,
-        [documento.tamaño_archivo, req.user.departamento_id]
-      );
-      
-      await client.query(
-        `INSERT INTO espacio_almacenamiento (departamento_id, usado_bytes, limite_bytes)
-         VALUES ($1, $2, 5368709120)
-         ON CONFLICT (departamento_id) 
-         DO UPDATE SET 
-           usado_bytes = espacio_almacenamiento.usado_bytes + $2,
-           fecha_calculo = CURRENT_TIMESTAMP`,
-        [hacia_departamento_id, documento.tamaño_archivo]
-      );
-      
-      await client.query('COMMIT');
+    }
+    
+    const documento = docResult.rows[0];
+    const desde_departamento_id = documento.departamento_id;
+    
+    // Verificar que el destino sea diferente al origen
+    if (parseInt(hacia_departamento_id) === desde_departamento_id) {
+      await client.query('ROLLBACK');
       client.release();
-      
-      console.log('✅ Transferencia completada exitosamente');
-      
-      res.json({
-        success: true,
-        message: 'Documento transferido exitosamente',
-        documento_id: id,
-        detalles: {
-          desde: documento.departamento_actual,
-          hacia: departamentoDestino.nombre,
-          fecha: new Date().toISOString()
-        }
-      });
-      
-    } catch (error) {
-      console.error('❌ Error transfiriendo documento:', error);
-      
-      if (client) {
-        try {
-          await client.query('ROLLBACK');
-          client.release();
-        } catch (rollbackError) {
-          console.error('Error en rollback:', rollbackError);
-        }
-      }
-      
-      res.status(500).json({ 
+      return res.status(400).json({ 
         success: false, 
-        error: 'Error interno del servidor al transferir documento',
-        details: error.message
+        error: 'No puedes transferir al mismo departamento' 
       });
     }
+    
+    // Verificar que el departamento destino existe y está activo
+    const deptResult = await client.query(
+      'SELECT * FROM departamentos WHERE id = $1 AND activo = true',
+      [hacia_departamento_id]
+    );
+    
+    if (deptResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Departamento destino no encontrado o inactivo' 
+      });
+    }
+    
+    const departamentoDestino = deptResult.rows[0];
+    
+    // Actualizar el departamento del documento
+    await client.query(
+      `UPDATE documentos 
+       SET departamento_id = $1, 
+           fecha_actualizacion = CURRENT_TIMESTAMP 
+       WHERE id = $2`,
+      [hacia_departamento_id, id]
+    );
+    
+    console.log('✅ Documento actualizado con nuevo departamento');
+    
+    // Registrar en historial de transferencias
+    await client.query(
+      `INSERT INTO transferencias_departamento (
+        documento_id, desde_departamento_id, hacia_departamento_id, 
+        transferido_por, motivo, transferencia_masiva
+      ) VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        id,
+        desde_departamento_id,
+        hacia_departamento_id,
+        req.user.id,
+        motivo?.trim() || 'Transferencia administrativa',
+        false
+      ]
+    );
+    
+    // Actualizar espacio de almacenamiento (restar del origen)
+    await client.query(
+      `UPDATE espacio_almacenamiento 
+       SET usado_bytes = GREATEST(0, COALESCE(usado_bytes, 0) - $1),
+           fecha_calculo = CURRENT_TIMESTAMP
+       WHERE departamento_id = $2`,
+      [documento.tamaño_archivo, desde_departamento_id]
+    );
+    
+    // Agregar espacio al destino
+    await client.query(
+      `INSERT INTO espacio_almacenamiento (departamento_id, usado_bytes, limite_bytes)
+       VALUES ($1, $2, 5368709120)
+       ON CONFLICT (departamento_id) 
+       DO UPDATE SET 
+         usado_bytes = espacio_almacenamiento.usado_bytes + $2,
+         fecha_calculo = CURRENT_TIMESTAMP`,
+      [hacia_departamento_id, documento.tamaño_archivo]
+    );
+    
+    await client.query('COMMIT');
+    client.release();
+    
+    console.log('✅ Transferencia completada exitosamente');
+    
+    res.json({
+      success: true,
+      message: 'Documento transferido exitosamente',
+      documento_id: id,
+      detalles: {
+        desde: documento.departamento_actual,
+        hacia: departamentoDestino.nombre,
+        fecha: new Date().toISOString()
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Error transfiriendo documento:', error);
+    
+    if (client) {
+      try {
+        await client.query('ROLLBACK');
+        client.release();
+      } catch (rollbackError) {
+        console.error('Error en rollback:', rollbackError);
+      }
+    }
+    
+    res.status(500).json({ 
+      success: false, 
+      error: 'Error interno del servidor al transferir documento',
+      details: error.message
+    });
   }
+}
   
 // ========== ELIMINAR DOCUMENTO ==========
 async deleteDocument(req, res) {
