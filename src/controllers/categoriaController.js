@@ -260,36 +260,68 @@ const obtenerCategoriasPorDepartamento = async (req, res) => {
     const { soloActivas = true } = req.query;
     
     try {
-        // 🔥 MODIFICADO: Si es admin, puede ver categorías de CUALQUIER departamento
-        // Si es usuario normal, solo puede ver su propio departamento
-        if (req.user.rol !== 'administrador' && parseInt(departamentoId) !== req.user.departamento_id) {
+        const deptoId = parseInt(departamentoId);
+        
+        if (isNaN(deptoId)) {
+            return res.status(400).json({
+                exito: false,
+                mensaje: 'ID de departamento inválido'
+            });
+        }
+        
+        // 🔥 VERIFICAR PERMISOS
+        if (req.user.rol !== 'administrador' && req.user.departamento_id !== deptoId) {
+            console.log(`❌ Permiso denegado: Usuario ${req.user.id} (depto ${req.user.departamento_id}) intenta ver depto ${deptoId}`);
             return res.status(403).json({
                 exito: false,
                 mensaje: 'No tienes permisos para ver categorías de este departamento'
             });
         }
         
-        console.log(`${req.user.rol === 'administrador' ? '👑 Admin' : '👤 Usuario'} viendo categorías del departamento ${departamentoId}`);
+        console.log(`${req.user.rol === 'administrador' ? '👑 Admin' : '👤 Usuario'} viendo categorías del departamento ${deptoId}`);
         
+        // 🔥 CONSULTA CORREGIDA - SIN usar la vista que no existe
         const query = `
-            SELECT * FROM vista_categorias_departamentos
-            WHERE departamento_id = $1 
-            AND ($2 = false OR asignacion_activa = true)
-            ORDER BY categoria_nombre;
+            SELECT 
+                c.id,
+                c.nombre,
+                c.codigo,
+                c.descripcion,
+                c.exclusiva,
+                c.activo,
+                cd.fecha_asignacion,
+                COALESCE((
+                    SELECT COUNT(*) 
+                    FROM documentos_categorias dc 
+                    WHERE dc.categoria_id = c.id
+                ), 0) as total_documentos
+            FROM categorias_departamentos cd
+            INNER JOIN categorias_documento c ON cd.categoria_id = c.id
+            WHERE cd.departamento_id = $1
+            ORDER BY c.nombre;
         `;
         
-        const result = await db.query(query, [
-            departamentoId, 
-            soloActivas === 'true' || soloActivas === undefined
-        ]);
+        const result = await db.query(query, [deptoId]);
+        
+        console.log(`✅ Encontradas ${result.rows.length} categorías para departamento ${deptoId}`);
+        
+        // Filtrar por activas si es necesario
+        let categorias = result.rows;
+        if (soloActivas === 'true' || soloActivas === true) {
+            categorias = categorias.filter(c => c.activo === true);
+            console.log(`📋 Filtradas a ${categorias.length} categorías activas`);
+        }
         
         res.json({
             exito: true,
-            categorias: result.rows,
-            rol: req.user.rol
+            categorias: categorias,
+            rol: req.user.rol,
+            departamento_id: deptoId
         });
+        
     } catch (error) {
-        console.error('Error obteniendo categorías del departamento:', error);
+        console.error('❌ Error obteniendo categorías del departamento:', error);
+        console.error('Stack:', error.stack);
         res.status(500).json({
             exito: false,
             mensaje: 'Error obteniendo categorías del departamento',
@@ -297,7 +329,6 @@ const obtenerCategoriasPorDepartamento = async (req, res) => {
         });
     }
 };
-
 /**
  * @desc    Obtener categorías disponibles para asignar a un departamento
  * @route   GET /api/categorias/disponibles/:departamentoId
