@@ -31,6 +31,8 @@ const getAllowedOrigins = () => {
     'http://localhost:19006',
     'http://localhost:3000',
     'http://localhost:5000',
+    'http://localhost',
+    'http://localhost:80',
     `http://${LOCAL_IP}:8081`,
     `exp://${LOCAL_IP}:8081`,
     'exp://localhost:19000',
@@ -86,8 +88,8 @@ const corsOptions = {
     'Authorization', 
     'Accept', 
     'X-Requested-With',
-    'cache-control',        // ← AGREGADO (minúsculas)
-    'Cache-Control',        // ← AGREGADO (mayúsculas)
+    'cache-control',
+    'Cache-Control',
     'Origin',
     'X-Auth-Token',
     'x-access-token',
@@ -102,7 +104,6 @@ const corsOptions = {
     'Cache-Control'
   ],
   optionsSuccessStatus: 200,
-  // 🔥 PERMITIR PREFLIGHT PARA TODAS LAS RUTAS
   preflightContinue: false
 };
 
@@ -134,6 +135,7 @@ const tipoDocumentoRoutes = require('./routes/tipoDocumentoRoutes');
 const categoriaRoutes = require('./routes/categoriaRoutes');
 const articulosRoutes = require('./routes/articulosRoutes');
 const configuracionPeriodosRoutes = require('./routes/configuracionPeriodosRoutes');
+const publicRoutes = require('./routes/publicRoutes'); // 🔥 NUEVA RUTA PÚBLICA
 
 // Ruta de health check
 app.get('/api/health', (req, res) => {
@@ -166,7 +168,8 @@ app.get('/', (req, res) => {
       tiposDocumento: '/api/tipos-documento',
       articulos: '/api/articulos',
       articulosPermisos: '/api/articulos/permisos',
-      configuracionPeriodos: '/api/configuracion-periodos'
+      configuracionPeriodos: '/api/configuracion-periodos',
+      public: '/api/public'
     }
   });
 });
@@ -181,6 +184,7 @@ app.use('/api/tipos-documento', tipoDocumentoRoutes);
 app.use('/api/categorias', categoriaRoutes);
 app.use('/api/articulos', articulosRoutes);
 app.use('/api/configuracion-periodos', configuracionPeriodosRoutes);
+app.use('/api/public', publicRoutes); // 🔥 NUEVA RUTA PÚBLICA
 
 // Ruta no encontrada
 app.use('*', (req, res) => {
@@ -196,7 +200,8 @@ app.use('*', (req, res) => {
       '/api/documentos',
       '/api/categorias',
       '/api/departamentos',
-      '/api/articulos'
+      '/api/articulos',
+      '/api/public/documentos'
     ]
   });
 });
@@ -242,6 +247,7 @@ app.listen(PORT, HOST, () => {
   console.log('   GET  /api/categorias      - Categorías');
   console.log('   GET  /api/articulos       - Lista artículos');
   console.log('   GET  /api/configuracion-periodos - Configuración periodos');
+  console.log('   GET  /api/public/documentos - Documentos públicos');
   console.log('\n✅ CORS configurado para:');
   getAllowedOrigins().forEach(origin => {
     console.log(`   - ${origin}`);
