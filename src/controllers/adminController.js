@@ -74,107 +74,110 @@ class AdminController {
     }
   }
   
-  async createUsuario(req, res) {
-    try {
-      const { correo, nombre_completo, departamento_id, rol, activo = true, contrasena } = req.body;
-      const usuarioResponsableId = req.user?.id;
-      
-      // Validaciones
-      if (!correo || !nombre_completo || !contrasena) {
-        return res.status(400).json({ error: 'Correo, nombre completo y contraseña son requeridos' });
-      }
-      
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(correo)) {
-        return res.status(400).json({ error: 'Correo electrónico inválido' });
-      }
-      
-      const rolesPermitidos = ['administrador', 'jefe', 'usuario'];
-      if (rol && !rolesPermitidos.includes(rol)) {
-        return res.status(400).json({ error: `Rol inválido. Debe ser: ${rolesPermitidos.join(', ')}` });
-      }
-      
-      // Verificar si el correo ya existe
-      const existingUser = await pool.query(
-        'SELECT id FROM usuarios WHERE correo = $1',
-        [correo]
-      );
-      
-      if (existingUser.rows.length > 0) {
-        return res.status(400).json({ error: 'El correo electrónico ya está registrado' });
-      }
-      
-      // Verificar departamento si se proporciona
-      if (departamento_id) {
-        const deptExists = await pool.query(
-          'SELECT id FROM departamentos WHERE id = $1 AND activo = true',
-          [departamento_id]
-        );
-        if (deptExists.rows.length === 0) {
-          return res.status(400).json({ error: 'Departamento no encontrado o inactivo' });
-        }
-      }
-      
-      // Hashear contraseña
-      const saltRounds = 10;
-      const hashContrasena = await bcrypt.hash(contrasena, saltRounds);
-      
-      // Insertar usuario
-      const result = await pool.query(
-        `INSERT INTO usuarios (correo, nombre_completo, departamento_id, rol, activo, hash_contrasena)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id, correo, nombre_completo, rol, activo, fecha_registro, departamento_id`,
-        [
-          correo.toLowerCase().trim(),
-          nombre_completo.trim(),
-          departamento_id || null,
-          rol || 'usuario',
-          activo,
-          hashContrasena
-        ]
-      );
-      
-      // Obtener nombre del departamento
-      let usuario = result.rows[0];
-      if (usuario.departamento_id) {
-        const deptResult = await pool.query(
-          'SELECT nombre FROM departamentos WHERE id = $1',
-          [usuario.departamento_id]
-        );
-        usuario.departamento_nombre = deptResult.rows[0]?.nombre;
-      }
-      
-      // Registrar en historial manualmente 
-      await pool.query(
-        `INSERT INTO historial_usuarios (
-          usuario_id, accion, detalles, cambios, usuario_responsable_id, ip_address
-        ) VALUES ($1, $2, $3, $4, $5, $6)`,
-        [
-          usuario.id,
-          'create',
-          'Usuario creado en el sistema',
-          JSON.stringify({
-            correo: usuario.correo,
-            nombre_completo: usuario.nombre_completo,
-            rol: usuario.rol,
-            activo: usuario.activo,
-            departamento_id: usuario.departamento_id
-          }),
-          usuarioResponsableId || usuario.id,
-          req.ip
-        ]
-      );
-      
-      res.status(201).json({
-        message: 'Usuario creado exitosamente',
-        usuario: usuario
-      });
-      
-    } catch (error) {
-      console.error('Error creando usuario:', error);
-      res.status(500).json({ error: 'Error interno del servidor' });
+ async createUsuario(req, res) {
+  try {
+    const { correo, nombre_completo, departamento_id, rol, activo = true, contrasena } = req.body;
+    const usuarioResponsableId = req.user?.id;
+    
+    // Validaciones
+    if (!correo || !nombre_completo || !contrasena) {
+      return res.status(400).json({ error: 'Correo, nombre completo y contraseña son requeridos' });
     }
+    
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(correo)) {
+      return res.status(400).json({ error: 'Correo electrónico inválido' });
+    }
+    
+    const rolesPermitidos = ['administrador', 'jefe', 'usuario'];
+    if (rol && !rolesPermitidos.includes(rol)) {
+      return res.status(400).json({ error: `Rol inválido. Debe ser: ${rolesPermitidos.join(', ')}` });
+    }
+    
+    // Verificar si el correo ya existe
+    const existingUser = await pool.query(
+      'SELECT id FROM usuarios WHERE correo = $1',
+      [correo]
+    );
+    
+    if (existingUser.rows.length > 0) {
+      return res.status(400).json({ error: 'El correo electrónico ya está registrado' });
+    }
+    
+    // Verificar departamento si se proporciona
+    if (departamento_id) {
+      const deptExists = await pool.query(
+        'SELECT id FROM departamentos WHERE id = $1 AND activo = true',
+        [departamento_id]
+      );
+      if (deptExists.rows.length === 0) {
+        return res.status(400).json({ error: 'Departamento no encontrado o inactivo' });
+      }
+    }
+    
+    // Hashear contraseña
+    const saltRounds = 10;
+    const hashContrasena = await bcrypt.hash(contrasena, saltRounds);
+    
+    // Insertar usuario
+    const result = await pool.query(
+      `INSERT INTO usuarios (correo, nombre_completo, departamento_id, rol, activo, hash_contrasena)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, correo, nombre_completo, rol, activo, fecha_registro, departamento_id`,
+      [
+        correo.toLowerCase().trim(),
+        nombre_completo.trim(),
+        departamento_id || null,
+        rol || 'usuario',
+        activo,
+        hashContrasena
+      ]
+    );
+    
+    // Obtener nombre del departamento
+    let usuario = result.rows[0];
+    if (usuario.departamento_id) {
+      const deptResult = await pool.query(
+        'SELECT nombre FROM departamentos WHERE id = $1',
+        [usuario.departamento_id]
+      );
+      usuario.departamento_nombre = deptResult.rows[0]?.nombre;
+    }
+    
+    // 🔥 ELIMINAR ESTE BLOQUE - NO INSERTAR MANUALMENTE EN HISTORIAL
+    // El trigger se encargará de insertar automáticamente cuando esté activo
+    /*
+    await pool.query(
+      `INSERT INTO historial_usuarios (
+        usuario_id, accion, detalles, cambios, usuario_responsable_id, ip_address
+      ) VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        usuario.id,
+        'create',
+        'Usuario creado en el sistema',
+        JSON.stringify({
+          correo: usuario.correo,
+          nombre_completo: usuario.nombre_completo,
+          rol: usuario.rol,
+          activo: usuario.activo,
+          departamento_id: usuario.departamento_id
+        }),
+        usuarioResponsableId || usuario.id,
+        req.ip
+      ]
+    );
+    */
+    
+    res.status(201).json({
+      message: 'Usuario creado exitosamente',
+      usuario: usuario
+    });
+    
+  } catch (error) {
+    console.error('Error creando usuario:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
+}
   
   async updateUsuario(req, res) {
     try {
