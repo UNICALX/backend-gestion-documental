@@ -144,30 +144,6 @@ class AdminController {
       usuario.departamento_nombre = deptResult.rows[0]?.nombre;
     }
     
-    // 🔥 ELIMINAR ESTE BLOQUE - NO INSERTAR MANUALMENTE EN HISTORIAL
-    // El trigger se encargará de insertar automáticamente cuando esté activo
-    /*
-    await pool.query(
-      `INSERT INTO historial_usuarios (
-        usuario_id, accion, detalles, cambios, usuario_responsable_id, ip_address
-      ) VALUES ($1, $2, $3, $4, $5, $6)`,
-      [
-        usuario.id,
-        'create',
-        'Usuario creado en el sistema',
-        JSON.stringify({
-          correo: usuario.correo,
-          nombre_completo: usuario.nombre_completo,
-          rol: usuario.rol,
-          activo: usuario.activo,
-          departamento_id: usuario.departamento_id
-        }),
-        usuarioResponsableId || usuario.id,
-        req.ip
-      ]
-    );
-    */
-    
     res.status(201).json({
       message: 'Usuario creado exitosamente',
       usuario: usuario
@@ -528,80 +504,56 @@ class AdminController {
     }
   }
   
-  async createDepartamento(req, res) {
-    try {
-      const { nombre, codigo, descripcion, activo = true } = req.body;
-      
-      // Obtener usuarioResponsableId de forma segura
-      let usuarioResponsableId = 1; // ID por defecto (usuario sistema)
-      if (req.user && req.user.id) {
-        usuarioResponsableId = req.user.id;
-      }
-      
-      // Validaciones
-      if (!nombre || !codigo) {
-        return res.status(400).json({ error: 'Nombre y código son requeridos' });
-      }
-      
-      // Verificar si el código ya existe
-      const existingDept = await pool.query(
-        'SELECT id FROM departamentos WHERE codigo = $1',
-        [codigo.toUpperCase()]
-      );
-      
-      if (existingDept.rows.length > 0) {
-        return res.status(400).json({ error: 'El código de departamento ya está registrado' });
-      }
-      
-      // Insertar departamento
-      const result = await pool.query(
-        `INSERT INTO departamentos (nombre, codigo, descripcion, activo)
-         VALUES ($1, $2, $3, $4)
-         RETURNING id, nombre, codigo, descripcion, activo, fecha_creacion`,
-        [
-          nombre.trim(),
-          codigo.toUpperCase().trim(),
-          descripcion?.trim() || '',
-          activo
-        ]
-      );
-      
-      // Crear registro de espacio de almacenamiento
-      await pool.query(
-        'INSERT INTO espacio_almacenamiento (departamento_id) VALUES ($1)',
-        [result.rows[0].id]
-      );
-      
-      // Registrar en historial
-      await pool.query(
-        `INSERT INTO historial_departamentos (
-          departamento_id, accion, detalles, cambios, usuario_responsable_id, ip_address
-        ) VALUES ($1, $2, $3, $4, $5, $6)`,
-        [
-          result.rows[0].id,
-          'create',
-          'Departamento creado',
-          JSON.stringify({
-            nombre: nombre,
-            codigo: codigo,
-            descripcion: descripcion,
-            activo: activo
-          }),
-          usuarioResponsableId,
-          req.ip || '127.0.0.1'
-        ]
-      );
-      
-      res.status(201).json({
-        message: 'Departamento creado exitosamente',
-        departamento: result.rows[0]
-      });
-      
-    } catch (error) {
-      console.error('Error creando departamento:', error);
-      res.status(500).json({ error: 'Error interno del servidor' });
+async createDepartamento(req, res) {
+  try {
+    const { nombre, codigo, descripcion, activo = true } = req.body;
+    
+    let usuarioResponsableId = 1;
+    if (req.user && req.user.id) {
+      usuarioResponsableId = req.user.id;
     }
+    
+    if (!nombre || !codigo) {
+      return res.status(400).json({ error: 'Nombre y código son requeridos' });
+    }
+    
+    const existingDept = await pool.query(
+      'SELECT id FROM departamentos WHERE codigo = $1',
+      [codigo.toUpperCase()]
+    );
+    
+    if (existingDept.rows.length > 0) {
+      return res.status(400).json({ error: 'El código de departamento ya está registrado' });
+    }
+    
+    const result = await pool.query(
+      `INSERT INTO departamentos (nombre, codigo, descripcion, activo)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, nombre, codigo, descripcion, activo, fecha_creacion`,
+      [
+        nombre.trim(),
+        codigo.toUpperCase().trim(),
+        descripcion?.trim() || '',
+        activo
+      ]
+    );
+    
+    // Crear registro de espacio de almacenamiento
+    await pool.query(
+      'INSERT INTO espacio_almacenamiento (departamento_id) VALUES ($1)',
+      [result.rows[0].id]
+    );
+    
+    res.status(201).json({
+      message: 'Departamento creado exitosamente',
+      departamento: result.rows[0]
+    });
+    
+  } catch (error) {
+    console.error('Error creando departamento:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
+}
   
   async updateDepartamento(req, res) {
     try {
